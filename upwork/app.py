@@ -6,6 +6,7 @@ Launch: python3 upwork_tool.py
 """
 
 import streamlit as st
+from datetime import datetime, timezone
 from upwork_api import (
     KEYWORD_GROUPS,
     CLIENT_ID,
@@ -36,6 +37,7 @@ if "searched" not in st.session_state:
     st.session_state.searched = False
 if "dismissed" not in st.session_state:
     st.session_state.dismissed = set()
+
 
 def _save_token_to_env(token):
     """Write UPWORK_ACCESS_TOKEN into .env so it persists across restarts."""
@@ -108,14 +110,41 @@ def format_time_ago(created):
     if not created:
         return ""
     try:
-        from datetime import datetime, timezone
         dt = datetime.fromisoformat(created.replace("Z", "+00:00").replace(" ", "T"))
         hours = (datetime.now(timezone.utc) - dt).total_seconds() / 3600
+        if hours < 1:
+            return "just now"
         if hours < 24:
             return f"{int(hours)}h ago"
         return f"{int(hours / 24)}d ago"
     except Exception:
         return ""
+
+
+def _job_hours_old(job):
+    """Return hours since job was posted (for recency filtering/sorting)."""
+    created = job.get("created", "")
+    if not created:
+        return 9999
+    try:
+        dt = datetime.fromisoformat(created.replace("Z", "+00:00").replace(" ", "T"))
+        return (datetime.now(timezone.utc) - dt).total_seconds() / 3600
+    except Exception:
+        return 9999
+
+
+def _job_budget_value(job):
+    """Parse budget string into a comparable number for sorting."""
+    budget = str(job.get("budget", ""))
+    import re
+    # Extract the first number found (handles "$500", "$15/hr", "$1,000-$5,000")
+    nums = re.findall(r"[\d,]+", budget)
+    if nums:
+        try:
+            return float(nums[0].replace(",", ""))
+        except Exception:
+            pass
+    return 0
 
 
 # ── Header ─────────────────────────────────────────────────────────────────────
@@ -142,11 +171,25 @@ if not is_authed:
 with st.sidebar:
     st.header("Search Jobs")
 
+    # Service areas with Select All / None
     st.subheader("Service Areas")
+    col_all, col_none = st.columns(2)
+    with col_all:
+        if st.button("All", use_container_width=True, key="select_all"):
+            for g in KEYWORD_GROUPS:
+                st.session_state[f"kw_{g}"] = True
+    with col_none:
+        if st.button("None", use_container_width=True, key="select_none"):
+            for g in KEYWORD_GROUPS:
+                st.session_state[f"kw_{g}"] = False
+
     selected_groups = []
     for group_name in KEYWORD_GROUPS:
         default = group_name in ["Reddit Ads", "Meta / Facebook Ads", "Campaign Management"]
-        if st.checkbox(group_name, value=default):
+        key = f"kw_{group_name}"
+        if key not in st.session_state:
+            st.session_state[key] = default
+        if st.checkbox(group_name, value=st.session_state[key], key=key):
             selected_groups.append(group_name)
 
     custom_kw = st.text_input(
@@ -157,14 +200,32 @@ with st.sidebar:
     st.subheader("Filters")
     job_type = st.radio("Job Type", ["All", "Fixed-Price", "Hourly"], index=0)
     job_type_param = {"All": "all", "Fixed-Price": "fixed", "Hourly": "hourly"}[job_type]
+
+    posted_within = st.selectbox(
+        "Posted within",
+        ["All time", "Last 24h", "Last 48h", "Last 7 days"],
+        index=0,
+    )
+    posted_hours = {"All time": None, "Last 24h": 24, "Last 48h": 48, "Last 7 days": 168}[posted_within]
+
     min_score = st.slider("Minimum Relevance Score", 0, 10, 4)
 
-    search_clicked = st.button("Search Jobs", type="primary", use_container_width=True)
+    sort_by = st.selectbox(
+        "Sort by",
+        ["Score (high to low)", "Budget (high to low)", "Newest first"],
+        index=0,
+    )
+
+    search_clicked = st.button("🔍 Search Jobs", type="primary", use_container_width=True)
 
     if st.session_state.searched and st.session_state.jobs:
         st.divider()
-        visible = sum(1 for j in st.session_state.jobs if j["score"] >= min_score)
-        st.caption(f"{len(st.session_state.jobs)} found · {visible} above score {min_score}")
+        visible = sum(
+            1 for j in st.session_state.jobs
+            if j["score"] >= min_score
+            and (posted_hours is None or _job_hours_old(j) <= posted_hours)
+        )
+        st.caption(f"{len(st.session_state.jobs)} found · {visible} shown")
 
     st.divider()
     if st.button("Disconnect", use_container_width=True):
@@ -205,27 +266,41 @@ if search_clicked:
 
 # ── Results ────────────────────────────────────────────────────────────────────
 if st.session_state.searched:
+    # Filter
     jobs = [
         j for j in st.session_state.jobs
-        if j["score"] >= min_score and j["id"] not in st.session_state.dismissed
+        if j["score"] >= min_score
+        and j["id"] not in st.session_state.dismissed
+        and (posted_hours is None or _job_hours_old(j) <= posted_hours)
     ]
+
+    # Sort
+    if sort_by == "Score (high to low)":
+        jobs = sorted(jobs, key=lambda j: j["score"], reverse=True)
+    elif sort_by == "Budget (high to low)":
+        jobs = sorted(jobs, key=_job_budget_value, reverse=True)
+    elif sort_by == "Newest first":
+        jobs = sorted(jobs, key=_job_hours_old)
+
     total_found = len(st.session_state.jobs)
     dismissed_count = len(st.session_state.dismissed)
 
     if not jobs:
-        st.info("No jobs matched your filters. Try lowering the minimum score or adding more keywords.")
+        st.info("No jobs matched your filters. Try lowering the score, broadening the recency window, or adding more keywords.")
         if dismissed_count:
             if st.button("Restore dismissed jobs"):
                 st.session_state.dismissed = set()
                 st.rerun()
     else:
         st.caption(
-            f"Showing {len(jobs)} of {total_found} jobs"
+            f"Showing {len(jobs)} of {total_found} jobs · sorted by {sort_by.lower()}"
             + (f" · {dismissed_count} dismissed" if dismissed_count else "")
         )
+
         for job in jobs:
             jid = job["id"]
             with st.container(border=True):
+                # ── Title row ──────────────────────────────────────────────────
                 col1, col2, col3, col4 = st.columns([5, 2, 1, 1])
                 with col1:
                     title_md = f"**{job['title']}**"
@@ -241,6 +316,7 @@ if st.session_state.searched:
                         st.session_state.dismissed.add(jid)
                         st.rerun()
 
+                # ── Client + time row ──────────────────────────────────────────
                 time_str = format_time_ago(job["created"])
                 client_str = format_client(job["client"])
                 caption_parts = [client_str]
@@ -248,16 +324,19 @@ if st.session_state.searched:
                     caption_parts.append(time_str)
                 st.caption(" · ".join(caption_parts))
 
+                # ── Skills ─────────────────────────────────────────────────────
                 if job["skills"]:
                     st.markdown(" ".join(f"`{s}`" for s in job["skills"][:8]))
 
+                # ── Description preview ────────────────────────────────────────
                 desc = (job["description"] or "").replace("\n", " ").strip()
                 preview = desc[:400] + ("..." if len(desc) > 400 else "")
                 st.caption(preview)
 
-                col_gen, col_regen, _ = st.columns([2, 2, 4])
+                # ── Proposal controls ──────────────────────────────────────────
+                col_gen, col_regen, col_spacer = st.columns([2, 2, 4])
                 with col_gen:
-                    if st.button("Generate Proposal", key=f"gen_{jid}"):
+                    if st.button("✍️ Generate Proposal", key=f"gen_{jid}"):
                         with st.spinner("Writing proposal..."):
                             proposal = generate_proposal(
                                 title=job["title"],
@@ -270,8 +349,9 @@ if st.session_state.searched:
 
                 if jid in st.session_state.proposals:
                     proposal_text = st.session_state.proposals[jid]
+
                     with col_regen:
-                        if st.button("Regenerate", key=f"regen_{jid}"):
+                        if st.button("🔄 Regenerate", key=f"regen_{jid}"):
                             with st.spinner("Rewriting..."):
                                 proposal_text = generate_proposal(
                                     title=job["title"],
@@ -282,18 +362,34 @@ if st.session_state.searched:
                                 )
                             st.session_state.proposals[jid] = proposal_text
 
+                    # Word count with warning if over limit
                     word_count = len(proposal_text.split())
-                    st.caption(f"Proposal · {word_count} words — edit below or copy with the icon ↗")
-                    st.code(proposal_text, language=None)
+                    if proposal_text.startswith("Error:"):
+                        st.error(proposal_text)
+                    else:
+                        wc_label = f"📝 {word_count} words"
+                        if word_count > 200:
+                            wc_label += " ⚠️ over 200 — trim before sending"
+                        st.caption(wc_label)
+                        # Editable text area — easy to tweak and copy
+                        edited = st.text_area(
+                            "Proposal (edit before sending)",
+                            value=proposal_text,
+                            height=200,
+                            key=f"proposal_text_{jid}",
+                            label_visibility="collapsed",
+                        )
+                        if edited != proposal_text:
+                            st.session_state.proposals[jid] = edited
 
 elif not st.session_state.searched:
     st.markdown("""
 ### How to use
 
-1. Select service areas in the sidebar
-2. Adjust filters if needed
-3. Hit **Search Jobs**
-4. Click **Generate Proposal** on any job that looks good
+1. Select service areas in the sidebar (use **All / None** to toggle quickly)
+2. Set filters: job type, posted within, minimum score
+3. Hit **🔍 Search Jobs**
+4. Click **✍️ Generate Proposal** on any job that looks good
 
-Proposals are written in your voice. Edit before sending.
+Proposals are written in your voice. Edit directly in the text box before sending.
 """)
