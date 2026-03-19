@@ -250,62 +250,42 @@ query SearchJobs($searchExpr: String!) {
 }
 """
 
-# Job detail queries — try multiple approaches since Upwork's schema varies.
-# The search results type (MarketplaceJobPostingSearchResult) doesn't expose questions;
-# the full job posting type does, but the accepted ID format varies.
-_JOB_DETAIL_BY_CIPHERTEXT = """
-query JobDetail($ciphertext: String!) {
-  marketplaceJobPosting(ciphertext: $ciphertext) {
-    id
-    questions { question }
-  }
-}
-"""
-
-_JOB_DETAIL_BY_ID = """
-query JobDetail($jobId: ID!) {
-  marketplaceJobPosting(id: $jobId) {
-    id
-    questions { question }
-  }
-}
-"""
-
-
-def _extract_questions(data):
-    """Pull question strings out of a marketplaceJobPosting response."""
-    if not data:
-        return None  # None = query failed; [] = query ok but no questions
-    posting = data.get("marketplaceJobPosting") or {}
-    raw = posting.get("questions") or []
-    return [q.get("question", "").strip() for q in raw if q.get("question")]
+_REST_JOB_BASE = "https://api.upwork.com/api/profiles/v2/jobs"
 
 
 def fetch_job_questions(job_id, ciphertext=None, token=None):
-    """Fetch screening questions for a single job.
+    """Fetch screening questions via Upwork REST API.
 
-    Tries ciphertext lookup first (matches URL format ~022...), then falls back
-    to internal node ID. Returns (questions_list, error_str).
-    questions_list is [] if none found or on error. error_str is None on success.
+    GraphQL does not expose the questions field on MarketplaceJobPosting.
+    Falls back to REST: tries ciphertext first, then internal node ID.
+    Returns (questions_list, error_str). error_str is None on success.
     """
-    global _last_api_error
+    tok = token or STORED_ACCESS_TOKEN
+    if not tok:
+        return [], "No access token available."
 
-    # 1. Try ciphertext (the ~022... format from the job URL — most reliable)
-    if ciphertext:
-        data = _gql(_JOB_DETAIL_BY_CIPHERTEXT, {"ciphertext": ciphertext}, token=token)
-        result = _extract_questions(data)
-        if result is not None:
-            return result, None
+    for lookup in filter(None, [ciphertext, job_id]):
+        try:
+            resp = requests.get(
+                f"{_REST_JOB_BASE}/{lookup}.json",
+                headers={**_HEADERS_BASE, "Authorization": f"Bearer {tok}"},
+                timeout=15,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                # Questions can live under several field names depending on API version
+                for field in ("questions", "screeningQuestions", "clientQuestions", "job_questions"):
+                    raw = data.get(field) or []
+                    if raw:
+                        return [
+                            (q if isinstance(q, str) else q.get("question") or q.get("text") or str(q)).strip()
+                            for q in raw if q
+                        ], None
+                return [], None  # 200 but no questions on this job
+        except Exception as e:
+            continue  # try next lookup key
 
-    # 2. Try internal node ID
-    data = _gql(_JOB_DETAIL_BY_ID, {"jobId": job_id}, token=token)
-    result = _extract_questions(data)
-    if result is not None:
-        return result, None
-
-    # Both failed — surface the last API error
-    err = _last_api_error or "Could not fetch screening questions."
-    return [], err
+    return [], "Screening questions aren't accessible via Upwork's API for this job."
 
 
 def _fmt_money(val):
