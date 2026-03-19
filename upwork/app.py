@@ -338,15 +338,20 @@ if st.session_state.searched:
                 col_gen, col_regen, col_spacer = st.columns([2, 2, 4])
                 with col_gen:
                     if st.button("✍️ Generate Proposal", key=f"gen_{jid}"):
+                        # Check for manually entered questions first
+                        manual_raw = st.session_state.get(f"manual_q_{jid}", "")
+                        manual_qs = [q.strip() for q in manual_raw.splitlines() if q.strip()]
                         # Fetch screening questions on-demand (not in search results)
                         with st.spinner("Checking for screening questions..."):
-                            questions, q_err = fetch_job_questions(
+                            auto_qs, q_err = fetch_job_questions(
                                 jid,
                                 ciphertext=job.get("ciphertext"),
                                 token=st.session_state.access_token,
                             )
-                            job["questions"] = questions  # cache for Regenerate
-                            job["questions_err"] = q_err
+                        # Manual questions take priority; fall back to auto-fetched
+                        questions = manual_qs or auto_qs or []
+                        job["questions"] = questions
+                        job["questions_err"] = q_err if not manual_qs else None
                         spinner_msg = "Writing proposal & answers..." if questions else "Writing proposal..."
                         with st.spinner(spinner_msg):
                             proposal = generate_proposal(
@@ -358,6 +363,32 @@ if st.session_state.searched:
                                 questions=questions or None,
                             )
                         st.session_state.proposals[jid] = proposal
+
+                # ── Manual screening questions input ───────────────────────────
+                with st.expander("📋 Add screening questions manually"):
+                    manual_qs_raw = st.text_area(
+                        "Questions",
+                        placeholder="Paste each question on a new line, e.g.\nWhat's your experience with Reddit Ads?\nHow do you approach creative testing?",
+                        height=100,
+                        key=f"manual_q_{jid}",
+                        label_visibility="collapsed",
+                    )
+                    if st.button("💬 Answer These Questions", key=f"answer_q_{jid}"):
+                        qs_list = [q.strip() for q in manual_qs_raw.splitlines() if q.strip()]
+                        if qs_list:
+                            with st.spinner("Writing proposal & answers..."):
+                                result = generate_proposal(
+                                    title=job["title"],
+                                    description=job["description"],
+                                    budget=job["budget"],
+                                    skills=job["skills"],
+                                    client_info=format_client(job["client"]),
+                                    questions=qs_list,
+                                )
+                            st.session_state.proposals[jid] = result
+                            st.rerun()
+                        else:
+                            st.caption("Paste at least one question first.")
 
                 if jid in st.session_state.proposals:
                     proposal_text = st.session_state.proposals[jid]
@@ -378,7 +409,7 @@ if st.session_state.searched:
 
                     # Show warning if question fetch failed (vs. job genuinely having none)
                     if job.get("questions_err"):
-                        st.warning(f"⚠️ Couldn't fetch screening questions: {job['questions_err']}")
+                        st.warning(f"⚠️ Couldn't auto-fetch screening questions. Paste them in the box above.")
 
                     if proposal_text.startswith("Error:"):
                         st.error(proposal_text)
@@ -393,8 +424,8 @@ if st.session_state.searched:
                         # ── Proposal box ──────────────────────────────────────
                         word_count = len(proposal_part.split())
                         wc_label = f"📝 {word_count} words"
-                        if word_count > 200:
-                            wc_label += " ⚠️ over 200 — trim before sending"
+                        if word_count > 150:
+                            wc_label += " ⚠️ over 150 — trim before sending"
                         st.caption(wc_label)
                         edited_proposal = st.text_area(
                             "Proposal",

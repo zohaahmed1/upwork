@@ -51,7 +51,7 @@ VOICE RULES (non-negotiable):
 - Short sentences. One idea per sentence. No setup, just facts.
 - State the number, move on. Don't over-explain.
 - Never: "I hope this finds you well", "I wanted to reach out", "leverage", "synergy", "delighted", "excited to", "I'd love to", "happy to help", "looking forward"
-- Under 200 words total
+- Under 150 words total. Shorter is better. Cut anything that doesn't add proof or move the reader.
 - No bullet points. Short paragraphs (1-3 sentences each).
 - Do NOT start with "I".
 - Abbreviations are fine: YoY, NA, B2B, B2C, DTC, CPL, CPA, ROAS, ICP.
@@ -200,7 +200,7 @@ Client Context: {client_str}
 Job Description:
 {description[:2000]}{questions_section}
 
-{output_instruction} Under 200 words for the proposal. No bullet points. No em-dashes."""
+{output_instruction} Under 150 words for the proposal. Shorter is better. No bullet points. No em-dashes."""
 
 
 def _via_sdk(user_prompt, max_tokens=512):
