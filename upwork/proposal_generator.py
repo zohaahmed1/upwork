@@ -113,9 +113,10 @@ def _via_oauth(user_prompt):
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
             "anthropic-version": "2023-06-01",
+            "anthropic-beta": "oauth-2025-04-20",
         },
         json={
-            "model": "claude-sonnet-4-6",
+            "model": "claude-sonnet-4-5",
             "max_tokens": 512,
             "system": _SYSTEM_PROMPT,
             "messages": [{"role": "user", "content": user_prompt}],
@@ -124,8 +125,8 @@ def _via_oauth(user_prompt):
     )
     if resp.status_code == 200:
         return resp.json()["content"][0]["text"].strip()
-    # Non-200 means token doesn't work for direct API calls — fall through to CLI
-    return None
+    # Raise so caller can surface the real error instead of falling through to CLI
+    raise RuntimeError(f"OAuth API HTTP {resp.status_code}: {resp.text[:300]}")
 
 
 # ── CLI via multiprocessing spawn ──────────────────────────────────────────────
@@ -222,12 +223,9 @@ def generate_proposal(title, description, budget, skills, client_info=""):
     # 2. OAuth token (Claude Max — works on Streamlit Cloud, no separate API key)
     if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
         try:
-            result = _via_oauth(user_prompt)
-            if result:
-                return result
-            # None means the token doesn't support direct API calls — fall through to CLI
-        except Exception:
-            pass
+            return _via_oauth(user_prompt)
+        except Exception as e:
+            return f"Error: OAuth API call failed — {e}"
 
     # 3. CLI via spawn (local only — avoids macOS Mach port segfault)
     try:
