@@ -74,6 +74,7 @@ META ADS / ECOMMERCE jobs:
 - Noirvere: $50/day to $2K/day, 3-5x ROAS
 - At WPP: Adidas $2.1M in spend, 11-30x ROAS
 - DrinkPureRose: CPA $77 on $3K spend via UGC hook testing
+- AI workflow: 20 ad variants produced in under 2 hours, 30+ creatives/month without burning design sprint capacity (use this when the job mentions creative production, creative fatigue, or creative testing at scale)
 - CTA: "What's your current monthly spend and ROAS target? Are you running creative testing or working off one or two hero ads?"
 
 B2B SAAS jobs (lead gen, pipeline, multi-platform):
@@ -107,11 +108,20 @@ EVENT MARKETING jobs:
 - Art of Living Canada: 3 sold-out shows (Vancouver, Edmonton, Calgary), 8 weeks, $35K spent, $3K+ tickets per show
 - CTA: "What's the event, when is it, and what's the budget? The earlier we start, the more runway to optimize before the date."
 
-CREATIVE STRATEGY jobs:
+CREATIVE STRATEGY jobs (ad creative production, creative testing frameworks, UGC, static/video ads):
+- AI-assisted creative workflow: 20 ad variants produced in under 2 hours. 30+ creatives per month. Brief to client-ready in one day vs 1-2 week traditional cycle.
+- Process: client brief and angle map (5+ angles) → copy per angle + visual direction brief → UGC/static/motion production → ABO test at $5-10/ad/day → 72hr pulse check (kill CTR <0.5% at day 3, scale ROAS 1.5x+ avg)
+- Weekly reporting: CTR/CPC/CPA/ROAS per ad, winner/loser summary, next week's test hypotheses
 - DrinkPureRose.com: UGC hook testing brought CPA to $77 on $3K ad spend
 - TinyProtectors: Built launch creative for Urban Outfitters in-store activation
 - Portfolio: skipthenoisemedia.com/progress
-- CTA: "How many ad variants are you running right now, and when did you last test a new hook or format?"
+- CTA: "How many ad variants are you running right now, and when did you last refresh a hook or format?"
+
+AD CREATIVE PRODUCTION jobs (specifically asking for someone to make ad creatives / UGC / static ads):
+- Use the AI workflow as the main proof point. Lead with speed and volume, not "AI-generated".
+- "We run an AI-assisted production workflow. Brief to client-ready in under 2 hours. 20+ variants per sprint, 30+ per month. Each one goes through a creative strategy filter before production."
+- Case studies: DrinkPureRose ($77 CPA via hook testing), TinyProtectors (Urban Outfitters activation), portfolio at skipthenoisemedia.com/progress
+- CTA: "What formats are you running right now — static, UGC, motion? And do you have existing brand assets or are we starting from scratch?"
 
 CAMPAIGN MANAGEMENT / MULTI-PLATFORM jobs:
 - Use whichever case studies match the client's industry and platform mix
@@ -126,7 +136,10 @@ Example 2 — Meta / eCommerce:
 Scaling DTC on Meta right now is a creative problem more than a targeting problem. TinyProtectors hit 3-4x ROAS at $15-20K/mo once we got the hook testing right. Noirvere went from $50/day to $2K/day at 3-5x ROAS. We'd audit your current creative library, identify the gaps by format and audience, then build a testing cadence to find your winners fast. What's your current monthly spend and ROAS target? Are you running creative testing or working off one or two hero ads?
 
 Example 3 — LinkedIn Ads / B2B:
-LinkedIn ABM gets expensive fast if targeting isn't tight. For Dell at WPP, we managed $700K+ using first-party company lists and title stacking. For Flare.io, we built the full pipeline from ad to lead magnet to HubSpot to qualification, targeting CTOs in NA. We'd start with your ICP, build the company list, layer seniority and function, then test Thought Leader Ads and Document Ads before scaling spend. What seniority level are you targeting, and do you have lead magnets in place or are we building from scratch?"""
+LinkedIn ABM gets expensive fast if targeting isn't tight. For Dell at WPP, we managed $700K+ using first-party company lists and title stacking. For Flare.io, we built the full pipeline from ad to lead magnet to HubSpot to qualification, targeting CTOs in NA. We'd start with your ICP, build the company list, layer seniority and function, then test Thought Leader Ads and Document Ads before scaling spend. What seniority level are you targeting, and do you have lead magnets in place or are we building from scratch?
+
+Example 4 — Creative Strategy / Ad Creative Production:
+Creative fatigue on paid social isn't a design problem, it's a volume problem. Most brands are testing 2-3 variants when they need 15-20 to find a winner. We run an AI-assisted production workflow that takes a brief to 20 client-ready variants in under two hours. 30+ creatives per month without burning design sprint capacity. Each angle goes through a strategy filter first — hook, format, audience, proof point — before anything gets built. For DrinkPureRose, UGC hook testing brought CPA down to $77 on $3K ad spend. How many ad variants are you running right now, and when did you last refresh a hook or format?"""
 
 
 def _build_user_prompt(title, description, budget, skills, client_info):
