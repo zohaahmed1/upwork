@@ -6,6 +6,7 @@ Launch: python3 upwork_tool.py
 """
 
 import streamlit as st
+import streamlit.components.v1 as components
 from datetime import datetime, timezone
 from upwork_api import (
     KEYWORD_GROUPS,
@@ -18,6 +19,7 @@ from upwork_api import (
     search_jobs,
     fetch_job_questions,
     get_last_api_error,
+    score_breakdown,
 )
 from proposal_generator import generate_proposal
 
@@ -38,6 +40,8 @@ if "searched" not in st.session_state:
     st.session_state.searched = False
 if "dismissed" not in st.session_state:
     st.session_state.dismissed = set()
+if "applied" not in st.session_state:
+    st.session_state.applied = set()
 
 
 def _save_token_to_env(token):
@@ -77,6 +81,7 @@ if _oauth_code and not st.session_state.access_token:
         st.query_params.clear()
 
 
+# ── Helper functions ───────────────────────────────────────────────────────────
 def score_badge(score):
     if score >= 8:
         return f"🟢 {score}/10"
@@ -136,9 +141,8 @@ def _job_hours_old(job):
 
 def _job_budget_value(job):
     """Parse budget string into a comparable number for sorting."""
-    budget = str(job.get("budget", ""))
     import re
-    # Extract the first number found (handles "$500", "$15/hr", "$1,000-$5,000")
+    budget = str(job.get("budget", ""))
     nums = re.findall(r"[\d,]+", budget)
     if nums:
         try:
@@ -146,6 +150,28 @@ def _job_budget_value(job):
         except Exception:
             pass
     return 0
+
+
+def _copy_button(text: str, key: str):
+    """Browser clipboard copy button via injected JS (works on Streamlit Cloud HTTPS)."""
+    safe_id = "".join(c for c in key if c.isalnum() or c == "_")
+    safe_text = text.replace("\\", "\\\\").replace("`", "\\`").replace("$", "\\$")
+    components.html(
+        f"""<button id="cb_{safe_id}"
+            onclick="navigator.clipboard.writeText(`{safe_text}`)
+                .then(()=>{{
+                    var b=document.getElementById('cb_{safe_id}');
+                    b.innerText='✅ Copied!';
+                    setTimeout(()=>b.innerText='📋 Copy',2000);
+                }})
+                .catch(()=>document.getElementById('cb_{safe_id}').innerText='Select & copy manually')"
+            style="background:#f0f2f6;border:1px solid #d0d3da;border-radius:6px;
+                   padding:5px 14px;cursor:pointer;font-size:12px;
+                   font-family:sans-serif;color:#31333F;white-space:nowrap;">
+            📋 Copy
+        </button>""",
+        height=38,
+    )
 
 
 # ── Header ─────────────────────────────────────────────────────────────────────
@@ -158,11 +184,9 @@ is_authed = bool(st.session_state.access_token)
 if not is_authed:
     with st.container(border=True):
         st.subheader("Connect Your Upwork Account")
-
         if not has_client_credentials():
             st.error("Add `UPWORK_CLIENT_ID` and `UPWORK_CLIENT_SECRET` to your `.env` file first.")
             st.stop()
-
         auth_url = get_auth_url()
         st.markdown(f"**[Click here to authorize on Upwork]({auth_url})**")
         st.info("After approving, Upwork will redirect you back here automatically and connect.")
@@ -226,14 +250,53 @@ with st.sidebar:
             if j["score"] >= min_score
             and (posted_hours is None or _job_hours_old(j) <= posted_hours)
         )
-        st.caption(f"{len(st.session_state.jobs)} found · {visible} shown")
+        applied_count = len(st.session_state.applied)
+        st.caption(
+            f"{len(st.session_state.jobs)} found · {visible} shown"
+            + (f" · {applied_count} applied" if applied_count else "")
+        )
 
     st.divider()
+
+    # ── Export proposals ───────────────────────────────────────────────────────
+    if st.session_state.proposals:
+        export_lines = []
+        for _j in st.session_state.jobs:
+            _pid = _j["id"]
+            if _pid in st.session_state.proposals:
+                export_lines += [
+                    f"=== {_j['title']} ===",
+                    f"Budget: {_j['budget']} | Score: {_j['score']}/10",
+                    f"URL: {_j.get('url', '')}",
+                    "",
+                    st.session_state.proposals[_pid],
+                    "\n" + "─" * 60 + "\n",
+                ]
+        st.download_button(
+            "⬇️ Export Proposals",
+            data="\n".join(export_lines),
+            file_name=f"proposals_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M')}.txt",
+            mime="text/plain",
+            use_container_width=True,
+        )
+
+    # ── Clear results ──────────────────────────────────────────────────────────
+    if st.session_state.jobs:
+        if st.button("🗑️ Clear Results", use_container_width=True):
+            st.session_state.jobs = []
+            st.session_state.proposals = {}
+            st.session_state.searched = False
+            st.session_state.applied = set()
+            st.session_state.dismissed = set()
+            st.rerun()
+
     if st.button("Disconnect", use_container_width=True):
         st.session_state.access_token = ""
         st.session_state.jobs = []
         st.session_state.proposals = {}
         st.session_state.searched = False
+        st.session_state.applied = set()
+        st.session_state.dismissed = set()
         st.rerun()
 
 # ── Search Logic ───────────────────────────────────────────────────────────────
@@ -256,9 +319,9 @@ if search_clicked:
             )
         err = get_last_api_error()
         if err and not jobs:
-            st.error(f"API Error: {err}")
+            st.error(f"Search failed: {err}")
             if "401" in str(err) or "403" in str(err):
-                st.info("Token may be expired. Click Disconnect in the sidebar and reconnect.")
+                st.warning("⚠️ Token expired. Click **Disconnect** in the sidebar and reconnect to Upwork.")
         else:
             st.session_state.jobs = jobs
             st.session_state.searched = True
@@ -267,7 +330,7 @@ if search_clicked:
 
 # ── Results ────────────────────────────────────────────────────────────────────
 if st.session_state.searched:
-    # Filter
+    # Filter (applied jobs stay visible, just badged differently)
     jobs = [
         j for j in st.session_state.jobs
         if j["score"] >= min_score
@@ -300,9 +363,11 @@ if st.session_state.searched:
 
         for job in jobs:
             jid = job["id"]
+            is_applied = jid in st.session_state.applied
+
             with st.container(border=True):
                 # ── Title row ──────────────────────────────────────────────────
-                col1, col2, col3, col4 = st.columns([5, 2, 1, 1])
+                col1, col2, col3, col4, col5 = st.columns([5, 2, 1, 1, 1])
                 with col1:
                     title_md = f"**{job['title']}**"
                     if job.get("url"):
@@ -311,8 +376,20 @@ if st.session_state.searched:
                 with col2:
                     st.markdown(f"💰 `{job['budget']}`")
                 with col3:
-                    st.markdown(score_badge(job["score"]))
+                    if is_applied:
+                        st.markdown("✅ Applied")
+                    else:
+                        st.markdown(score_badge(job["score"]))
                 with col4:
+                    if not is_applied:
+                        if st.button("✅", key=f"apply_{jid}", help="Mark as applied"):
+                            st.session_state.applied.add(jid)
+                            st.rerun()
+                    else:
+                        if st.button("↩️", key=f"unapply_{jid}", help="Undo applied"):
+                            st.session_state.applied.discard(jid)
+                            st.rerun()
+                with col5:
                     if st.button("✕", key=f"dismiss_{jid}", help="Dismiss this job"):
                         st.session_state.dismissed.add(jid)
                         st.rerun()
@@ -334,21 +411,50 @@ if st.session_state.searched:
                 preview = desc[:400] + ("..." if len(desc) > 400 else "")
                 st.caption(preview)
 
+                # ── Score breakdown ────────────────────────────────────────────
+                with st.expander(f"🔍 Score breakdown ({job['score']}/10)"):
+                    bd = score_breakdown(job)
+                    if bd["gated"]:
+                        st.caption("⚠️ Keyword signal < 2pts — budget & client bonuses not applied.")
+                    lines = []
+                    if bd["matched_pos"]:
+                        kw_parts = [f"+{pts} `{kw}`" for kw, pts in bd["matched_pos"]]
+                        lines.append(f"**Keywords ({bd['kw_score']}/6):** {' · '.join(kw_parts)}")
+                    else:
+                        lines.append("**Keywords:** no positive signals matched")
+                    if bd["matched_neg"]:
+                        neg_parts = [f"{pts} `{kw}`" for kw, pts in bd["matched_neg"]]
+                        lines.append(f"**Negatives ({bd['neg_total']}):** {' · '.join(neg_parts)}")
+                    if bd["budget_score"]:
+                        lines.append(f"**Budget:** +{bd['budget_score']}")
+                    if bd["client_score"]:
+                        lines.append(f"**Client quality:** +{bd['client_score']}")
+                    if bd["recency"]:
+                        lines.append("**Recency:** +1 (posted < 48h)")
+                    st.markdown("  \n".join(lines))
+
                 # ── Proposal controls ──────────────────────────────────────────
-                col_gen, col_regen, col_spacer = st.columns([2, 2, 4])
+                col_gen, col_angle, col_spacer = st.columns([2, 2, 4])
+                with col_angle:
+                    angle_label = st.selectbox(
+                        "Tone",
+                        ["Default", "Results-focused", "Aggressive", "Soft sell"],
+                        key=f"angle_{jid}",
+                        label_visibility="collapsed",
+                    )
+                _angle = None if angle_label == "Default" else angle_label
+
                 with col_gen:
                     if st.button("✍️ Generate Proposal", key=f"gen_{jid}"):
-                        # Check for manually entered questions first
+                        # Manual questions take priority over auto-fetch
                         manual_raw = st.session_state.get(f"manual_q_{jid}", "")
                         manual_qs = [q.strip() for q in manual_raw.splitlines() if q.strip()]
-                        # Fetch screening questions on-demand (not in search results)
                         with st.spinner("Checking for screening questions..."):
                             auto_qs, q_err = fetch_job_questions(
                                 jid,
                                 ciphertext=job.get("ciphertext"),
                                 token=st.session_state.access_token,
                             )
-                        # Manual questions take priority; fall back to auto-fetched
                         questions = manual_qs or auto_qs or []
                         job["questions"] = questions
                         job["questions_err"] = q_err if not manual_qs else None
@@ -361,6 +467,7 @@ if st.session_state.searched:
                                 skills=job["skills"],
                                 client_info=format_client(job["client"]),
                                 questions=questions or None,
+                                angle=_angle,
                             )
                         st.session_state.proposals[jid] = proposal
 
@@ -384,6 +491,7 @@ if st.session_state.searched:
                                     skills=job["skills"],
                                     client_info=format_client(job["client"]),
                                     questions=qs_list,
+                                    angle=_angle,
                                 )
                             st.session_state.proposals[jid] = result
                             st.rerun()
@@ -393,6 +501,8 @@ if st.session_state.searched:
                 if jid in st.session_state.proposals:
                     proposal_text = st.session_state.proposals[jid]
 
+                    # Regenerate button (outside col_gen so it renders after proposal exists)
+                    col_regen, col_spacer2 = st.columns([2, 6])
                     with col_regen:
                         if st.button("🔄 Regenerate", key=f"regen_{jid}"):
                             cached_questions = job.get("questions") or []
@@ -404,12 +514,13 @@ if st.session_state.searched:
                                     skills=job["skills"],
                                     client_info=format_client(job["client"]),
                                     questions=cached_questions or None,
+                                    angle=_angle,
                                 )
                             st.session_state.proposals[jid] = proposal_text
 
-                    # Show warning if question fetch failed (vs. job genuinely having none)
+                    # Show warning if question auto-fetch failed
                     if job.get("questions_err"):
-                        st.warning(f"⚠️ Couldn't auto-fetch screening questions. Paste them in the box above.")
+                        st.warning("⚠️ Couldn't auto-fetch screening questions. Paste them in the box above.")
 
                     if proposal_text.startswith("Error:"):
                         st.error(proposal_text)
@@ -434,6 +545,7 @@ if st.session_state.searched:
                             key=f"proposal_text_{jid}",
                             label_visibility="collapsed",
                         )
+                        _copy_button(edited_proposal, f"prop_{jid}")
 
                         # ── Screening Q&A box (shown only when present) ───────
                         if qa_part.strip():
@@ -445,7 +557,8 @@ if st.session_state.searched:
                                 key=f"qa_text_{jid}",
                                 label_visibility="collapsed",
                             )
-                            # Persist edits to both parts
+                            _copy_button(edited_qa, f"qa_{jid}")
+                            # Persist edits
                             st.session_state.proposals[jid] = edited_proposal + "\n---\n" + edited_qa
                         else:
                             if edited_proposal != proposal_part.strip():

@@ -169,9 +169,29 @@ We run an AI-assisted workflow - brief to 20 client-ready variants in under 2 ho
 How many variants are you running right now? When did you last test a new hook or format?"""
 
 
-def _build_user_prompt(title, description, budget, skills, client_info, questions=None):
+_ANGLE_HINTS = {
+    "Results-focused": (
+        "Lead hard with numbers. Open with the most relevant metric or case study result. "
+        "Every sentence earns its place with a fact. Minimal context-setting."
+    ),
+    "Aggressive": (
+        "Be blunt. Call out the gap or problem directly in the first line. Don't hedge. "
+        "Confident, not arrogant. Cut any softening language."
+    ),
+    "Soft sell": (
+        "Warmer tone. Start by acknowledging their situation. Lower-pressure CTA. "
+        "Frame it as a conversation, not a pitch."
+    ),
+}
+
+
+def _build_user_prompt(title, description, budget, skills, client_info, questions=None, angle=None):
     skills_str = ", ".join(skills[:8]) if skills else "not listed"
     client_str = client_info or "no additional client info"
+
+    angle_note = ""
+    if angle and angle in _ANGLE_HINTS:
+        angle_note = f"\n\nTone instruction: {_ANGLE_HINTS[angle]}"
 
     if questions:
         qs_block = "\n".join(f"{i+1}. {q}" for i, q in enumerate(questions))
@@ -190,7 +210,7 @@ Keep answers short. Use case studies where relevant."""
         questions_section = ""
         output_instruction = "Output the proposal only. No labels, no reasoning, no preamble. Start directly with the hook sentence."
 
-    return f"""Write a proposal for this Upwork job.
+    return f"""Write a proposal for this Upwork job.{angle_note}
 
 Job Title: {title}
 Budget: {budget}
@@ -320,8 +340,10 @@ def _via_cli(full_prompt):
     raise RuntimeError(f"claude CLI process exited unexpectedly (code {p.exitcode})")
 
 
-def generate_proposal(title, description, budget, skills, client_info="", questions=None):
+def generate_proposal(title, description, budget, skills, client_info="", questions=None, angle=None):
     """Generate a tailored Upwork proposal, optionally with screening question answers.
+
+    angle: None | "Results-focused" | "Aggressive" | "Soft sell"
 
     Priority:
       1. Anthropic SDK    — if ANTHROPIC_API_KEY is set
@@ -331,7 +353,7 @@ def generate_proposal(title, description, budget, skills, client_info="", questi
     Returns proposal text string (with Q&A appended after '---' if questions given),
     or an error message starting with 'Error:'.
     """
-    user_prompt = _build_user_prompt(title, description, budget, skills, client_info, questions)
+    user_prompt = _build_user_prompt(title, description, budget, skills, client_info, questions, angle)
     full_prompt = f"{_SYSTEM_PROMPT}\n\n---\n\n{user_prompt}"
     # Increase token limit when answering screening questions
     _max_tokens = 900 if questions else 512

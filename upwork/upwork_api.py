@@ -355,6 +355,69 @@ def _score_job(job):
     return max(0, min(total, 10))
 
 
+def score_breakdown(job):
+    """Return scoring components for a job (mirrors _score_job logic).
+
+    Returns dict:
+        kw_score, budget_score, client_score, recency, neg_total,
+        gated (bool), matched_pos [(kw, pts)], matched_neg [(kw, pts)]
+    """
+    text = (job.get("title", "") + " " + job.get("description", "")).lower()
+
+    matched_pos = [(kw, pts) for kw, pts in _SCORE_KEYWORDS.items() if kw in text]
+    matched_neg = [(kw, pts) for kw, pts in _NEGATIVE_KEYWORDS.items() if kw in text]
+    kw_raw = sum(pts for _, pts in matched_pos)
+    kw_score = min(kw_raw, 6)
+    neg_total = sum(pts for _, pts in matched_neg)
+    gated = kw_score < 2
+
+    budget_str = job.get("budget", "")
+    engagement = job.get("engagement", "").lower()
+    is_hourly = "/hr" in budget_str or "hourly" in engagement
+    budget_score = 0
+    if not gated:
+        try:
+            num = float(
+                budget_str.replace("$", "").replace(",", "").replace("/hr", "")
+                .strip().split("-")[0].strip()
+            )
+            if is_hourly:
+                budget_score = 2 if num >= 50 else (1 if num >= 25 else 0)
+            else:
+                budget_score = 2 if num >= 1000 else (1 if num >= 500 else 0)
+        except Exception:
+            pass
+
+    client = job.get("client") or {}
+    client_score = 0
+    if not gated:
+        if float(client.get("totalFeedback") or 0) >= 4.5:
+            client_score += 1
+        if int(client.get("totalPostedJobs") or 0) >= 5:
+            client_score += 1
+
+    recency = 0
+    created = job.get("created", "")
+    if created and not gated:
+        try:
+            dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+            if (datetime.now(timezone.utc) - dt).total_seconds() / 3600 <= 48:
+                recency = 1
+        except Exception:
+            pass
+
+    return {
+        "kw_score": kw_score,
+        "budget_score": budget_score,
+        "client_score": client_score,
+        "recency": recency,
+        "neg_total": neg_total,
+        "gated": gated,
+        "matched_pos": matched_pos,
+        "matched_neg": matched_neg,
+    }
+
+
 def search_jobs(keywords, job_type="all", limit=30, token=None):
     """Search Upwork jobs across a list of keywords.
 
