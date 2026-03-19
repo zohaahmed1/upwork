@@ -5,9 +5,11 @@ Skip the Noise Media — Reddit Certified Partner
 Launch: python3 upwork_tool.py
 """
 
+import json
 import streamlit as st
 import streamlit.components.v1 as components
 from datetime import datetime, timezone
+from pathlib import Path
 from upwork_api import (
     KEYWORD_GROUPS,
     CLIENT_ID,
@@ -22,6 +24,41 @@ from upwork_api import (
     score_breakdown,
 )
 from proposal_generator import generate_proposal
+
+# ── Applied-jobs log (persists across page refreshes) ──────────────────────────
+_APPLIED_LOG_PATH = Path(__file__).resolve().parent / "applied_jobs.json"
+
+
+def _load_applied_log() -> list:
+    """Load applied jobs from the JSON log file."""
+    try:
+        if _APPLIED_LOG_PATH.exists():
+            return json.loads(_APPLIED_LOG_PATH.read_text())
+    except Exception:
+        pass
+    return []
+
+
+def _save_to_applied_log(job: dict, proposal_text: str = "") -> None:
+    """Append a job to the applied log (silently ignores write errors)."""
+    log = _load_applied_log()
+    existing_ids = {e["id"] for e in log}
+    if job["id"] in existing_ids:
+        return
+    log.append({
+        "id": job["id"],
+        "title": job["title"],
+        "url": job.get("url", ""),
+        "budget": job.get("budget", ""),
+        "score": job.get("score", 0),
+        "applied_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+        "proposal_preview": proposal_text[:300] if proposal_text else "",
+    })
+    try:
+        _APPLIED_LOG_PATH.write_text(json.dumps(log, indent=2))
+    except Exception:
+        pass  # Streamlit Cloud has ephemeral FS — log stays in session_state only
+
 
 st.set_page_config(
     page_title="Upwork Job Finder — Skip the Noise",
@@ -41,12 +78,12 @@ if "searched" not in st.session_state:
 if "dismissed" not in st.session_state:
     st.session_state.dismissed = set()
 if "applied" not in st.session_state:
-    st.session_state.applied = set()
+    # Restore from log file so applied state survives page refreshes
+    st.session_state.applied = {e["id"] for e in _load_applied_log()}
 
 
 def _save_token_to_env(token):
     """Write UPWORK_ACCESS_TOKEN into .env so it persists across restarts."""
-    from pathlib import Path
     env_path = Path(__file__).resolve().parent.parent / ".env"
     if not env_path.exists():
         return
@@ -330,11 +367,12 @@ if search_clicked:
 
 # ── Results ────────────────────────────────────────────────────────────────────
 if st.session_state.searched:
-    # Filter (applied jobs stay visible, just badged differently)
+    # Filter — applied jobs move to their own section below
     jobs = [
         j for j in st.session_state.jobs
         if j["score"] >= min_score
         and j["id"] not in st.session_state.dismissed
+        and j["id"] not in st.session_state.applied
         and (posted_hours is None or _job_hours_old(j) <= posted_hours)
     ]
 
@@ -363,7 +401,6 @@ if st.session_state.searched:
 
         for job in jobs:
             jid = job["id"]
-            is_applied = jid in st.session_state.applied
 
             with st.container(border=True):
                 # ── Title row ──────────────────────────────────────────────────
@@ -376,19 +413,15 @@ if st.session_state.searched:
                 with col2:
                     st.markdown(f"💰 `{job['budget']}`")
                 with col3:
-                    if is_applied:
-                        st.markdown("✅ Applied")
-                    else:
-                        st.markdown(score_badge(job["score"]))
+                    st.markdown(score_badge(job["score"]))
                 with col4:
-                    if not is_applied:
-                        if st.button("✅", key=f"apply_{jid}", help="Mark as applied"):
-                            st.session_state.applied.add(jid)
-                            st.rerun()
-                    else:
-                        if st.button("↩️", key=f"unapply_{jid}", help="Undo applied"):
-                            st.session_state.applied.discard(jid)
-                            st.rerun()
+                    if st.button("✅", key=f"apply_{jid}", help="Mark as applied"):
+                        st.session_state.applied.add(jid)
+                        _save_to_applied_log(
+                            job,
+                            st.session_state.proposals.get(jid, ""),
+                        )
+                        st.rerun()
                 with col5:
                     if st.button("✕", key=f"dismiss_{jid}", help="Dismiss this job"):
                         st.session_state.dismissed.add(jid)
@@ -545,7 +578,17 @@ if st.session_state.searched:
                             key=f"proposal_text_{jid}",
                             label_visibility="collapsed",
                         )
-                        _copy_button(edited_proposal, f"prop_{jid}")
+                        # ── Copy + Quick Apply row ────────────────────────────
+                        _ca_url = (
+                            f"https://www.upwork.com/ab/proposals/job/{job['ciphertext']}/apply/"
+                            if job.get("ciphertext") else job.get("url", "")
+                        )
+                        col_copy, col_apply, col_pad = st.columns([1, 1, 4])
+                        with col_copy:
+                            _copy_button(edited_proposal, f"prop_{jid}")
+                        with col_apply:
+                            if _ca_url:
+                                st.link_button("🚀 Quick Apply", _ca_url, use_container_width=True)
 
                         # ── Screening Q&A box (shown only when present) ───────
                         if qa_part.strip():
@@ -563,6 +606,59 @@ if st.session_state.searched:
                         else:
                             if edited_proposal != proposal_part.strip():
                                 st.session_state.proposals[jid] = edited_proposal
+
+    # ── Applied Jobs section ───────────────────────────────────────────────────
+    applied_log = _load_applied_log()
+    # Also include any in-session applied jobs not yet written to file
+    session_applied_ids = st.session_state.applied
+    logged_ids = {e["id"] for e in applied_log}
+    # Build applied cards from current search results (for in-session applies)
+    in_session_only = [
+        j for j in st.session_state.jobs
+        if j["id"] in session_applied_ids and j["id"] not in logged_ids
+    ]
+
+    if applied_log or in_session_only:
+        st.divider()
+        total_applied = len(applied_log) + len(in_session_only)
+        with st.expander(f"✅ Applied Jobs ({total_applied})", expanded=False):
+            # Show log entries (persistent)
+            for entry in reversed(applied_log):
+                col_a, col_b, col_c = st.columns([5, 2, 1])
+                with col_a:
+                    url = entry.get("url", "")
+                    title_md = f"**[{entry['title']}]({url})**" if url else f"**{entry['title']}**"
+                    st.markdown(title_md)
+                with col_b:
+                    st.caption(f"💰 {entry.get('budget', '')} · {entry.get('applied_at', '')}")
+                with col_c:
+                    if st.button("↩️", key=f"unapply_log_{entry['id']}", help="Remove from applied"):
+                        st.session_state.applied.discard(entry["id"])
+                        # Rewrite log without this entry
+                        updated = [e for e in applied_log if e["id"] != entry["id"]]
+                        try:
+                            _APPLIED_LOG_PATH.write_text(json.dumps(updated, indent=2))
+                        except Exception:
+                            pass
+                        st.rerun()
+                if entry.get("proposal_preview"):
+                    st.caption(f"_{entry['proposal_preview'][:150]}..._")
+                st.divider()
+
+            # Show in-session applies not yet in the log
+            for job in in_session_only:
+                col_a, col_b, col_c = st.columns([5, 2, 1])
+                with col_a:
+                    url = job.get("url", "")
+                    title_md = f"**[{job['title']}]({url})**" if url else f"**{job['title']}**"
+                    st.markdown(title_md)
+                with col_b:
+                    st.caption(f"💰 {job.get('budget', '')} · this session")
+                with col_c:
+                    if st.button("↩️", key=f"unapply_sess_{job['id']}", help="Remove from applied"):
+                        st.session_state.applied.discard(job["id"])
+                        st.rerun()
+                st.divider()
 
 elif not st.session_state.searched:
     st.markdown("""
