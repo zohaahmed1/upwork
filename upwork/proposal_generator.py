@@ -116,7 +116,7 @@ def _via_oauth(user_prompt):
             "anthropic-beta": "oauth-2025-04-20",
         },
         json={
-            "model": "claude-sonnet-4-5",
+            "model": "claude-sonnet-4-6",
             "max_tokens": 512,
             "system": _SYSTEM_PROMPT,
             "messages": [{"role": "user", "content": user_prompt}],
