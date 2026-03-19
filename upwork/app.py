@@ -16,6 +16,7 @@ from upwork_api import (
     get_auth_url,
     exchange_code_for_token,
     search_jobs,
+    fetch_job_questions,
     get_last_api_error,
 )
 from proposal_generator import generate_proposal
@@ -334,19 +335,22 @@ if st.session_state.searched:
                 st.caption(preview)
 
                 # ── Proposal controls ──────────────────────────────────────────
-                has_questions = bool(job.get("questions"))
                 col_gen, col_regen, col_spacer = st.columns([2, 2, 4])
                 with col_gen:
-                    label = "✍️ Generate Proposal + Answers" if has_questions else "✍️ Generate Proposal"
-                    if st.button(label, key=f"gen_{jid}"):
-                        with st.spinner("Writing proposal..." if not has_questions else "Writing proposal & answers..."):
+                    if st.button("✍️ Generate Proposal", key=f"gen_{jid}"):
+                        # Fetch screening questions on-demand (not available in search results)
+                        with st.spinner("Checking for screening questions..."):
+                            questions = fetch_job_questions(jid, token=st.session_state.access_token)
+                            job["questions"] = questions  # cache on the job dict
+                        spinner_msg = "Writing proposal & answers..." if questions else "Writing proposal..."
+                        with st.spinner(spinner_msg):
                             proposal = generate_proposal(
                                 title=job["title"],
                                 description=job["description"],
                                 budget=job["budget"],
                                 skills=job["skills"],
                                 client_info=format_client(job["client"]),
-                                questions=job.get("questions"),
+                                questions=questions or None,
                             )
                         st.session_state.proposals[jid] = proposal
 
@@ -355,6 +359,7 @@ if st.session_state.searched:
 
                     with col_regen:
                         if st.button("🔄 Regenerate", key=f"regen_{jid}"):
+                            cached_questions = job.get("questions") or []
                             with st.spinner("Rewriting..."):
                                 proposal_text = generate_proposal(
                                     title=job["title"],
@@ -362,7 +367,7 @@ if st.session_state.searched:
                                     budget=job["budget"],
                                     skills=job["skills"],
                                     client_info=format_client(job["client"]),
-                                    questions=job.get("questions"),
+                                    questions=cached_questions or None,
                                 )
                             st.session_state.proposals[jid] = proposal_text
 

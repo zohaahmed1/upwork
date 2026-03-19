@@ -238,7 +238,6 @@ query SearchJobs($searchExpr: String!) {
         hourlyBudgetMin { displayValue rawValue }
         hourlyBudgetMax { displayValue rawValue }
         skills { name }
-        questions { question }
         client {
           totalFeedback
           totalPostedJobs
@@ -250,6 +249,28 @@ query SearchJobs($searchExpr: String!) {
   }
 }
 """
+
+# Job detail query — fetches screening questions for a single job by ID.
+# Questions are NOT available on search results (MarketplaceJobPostingSearchResult),
+# only on the full job posting type.
+_JOB_DETAIL_QUERY = """
+query JobDetail($jobId: ID!) {
+  marketplaceJobPosting(id: $jobId) {
+    id
+    questions { question }
+  }
+}
+"""
+
+
+def fetch_job_questions(job_id, token=None):
+    """Fetch screening questions for a single job. Returns list of strings (may be empty)."""
+    data = _gql(_JOB_DETAIL_QUERY, {"jobId": job_id}, token=token)
+    if not data:
+        return []
+    posting = data.get("marketplaceJobPosting") or {}
+    raw = posting.get("questions") or []
+    return [q.get("question", "").strip() for q in raw if q.get("question")]
 
 
 def _fmt_money(val):
@@ -369,10 +390,6 @@ def search_jobs(keywords, job_type="all", limit=30, token=None):
             }
 
             ciphertext = node.get("ciphertext", "")
-            # Extract screening questions (field may be absent on some jobs)
-            raw_questions = node.get("questions") or []
-            questions = [q.get("question", "").strip() for q in raw_questions if q.get("question")]
-
             job = {
                 "id": jid,
                 "title": node.get("title", ""),
@@ -383,7 +400,7 @@ def search_jobs(keywords, job_type="all", limit=30, token=None):
                 "client": client,
                 "created": node.get("createdDateTime", ""),
                 "url": f"https://www.upwork.com/jobs/{ciphertext}" if ciphertext else "",
-                "questions": questions,
+                "questions": [],  # fetched on-demand via fetch_job_questions()
             }
 
             if job_type == "hourly" and not is_hourly:
