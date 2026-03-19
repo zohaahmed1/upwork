@@ -250,10 +250,19 @@ query SearchJobs($searchExpr: String!) {
 }
 """
 
-# Job detail query — fetches screening questions for a single job by ID.
-# Questions are NOT available on search results (MarketplaceJobPostingSearchResult),
-# only on the full job posting type.
-_JOB_DETAIL_QUERY = """
+# Job detail queries — try multiple approaches since Upwork's schema varies.
+# The search results type (MarketplaceJobPostingSearchResult) doesn't expose questions;
+# the full job posting type does, but the accepted ID format varies.
+_JOB_DETAIL_BY_CIPHERTEXT = """
+query JobDetail($ciphertext: String!) {
+  marketplaceJobPosting(ciphertext: $ciphertext) {
+    id
+    questions { question }
+  }
+}
+"""
+
+_JOB_DETAIL_BY_ID = """
 query JobDetail($jobId: ID!) {
   marketplaceJobPosting(id: $jobId) {
     id
@@ -263,14 +272,40 @@ query JobDetail($jobId: ID!) {
 """
 
 
-def fetch_job_questions(job_id, token=None):
-    """Fetch screening questions for a single job. Returns list of strings (may be empty)."""
-    data = _gql(_JOB_DETAIL_QUERY, {"jobId": job_id}, token=token)
+def _extract_questions(data):
+    """Pull question strings out of a marketplaceJobPosting response."""
     if not data:
-        return []
+        return None  # None = query failed; [] = query ok but no questions
     posting = data.get("marketplaceJobPosting") or {}
     raw = posting.get("questions") or []
     return [q.get("question", "").strip() for q in raw if q.get("question")]
+
+
+def fetch_job_questions(job_id, ciphertext=None, token=None):
+    """Fetch screening questions for a single job.
+
+    Tries ciphertext lookup first (matches URL format ~022...), then falls back
+    to internal node ID. Returns (questions_list, error_str).
+    questions_list is [] if none found or on error. error_str is None on success.
+    """
+    global _last_api_error
+
+    # 1. Try ciphertext (the ~022... format from the job URL — most reliable)
+    if ciphertext:
+        data = _gql(_JOB_DETAIL_BY_CIPHERTEXT, {"ciphertext": ciphertext}, token=token)
+        result = _extract_questions(data)
+        if result is not None:
+            return result, None
+
+    # 2. Try internal node ID
+    data = _gql(_JOB_DETAIL_BY_ID, {"jobId": job_id}, token=token)
+    result = _extract_questions(data)
+    if result is not None:
+        return result, None
+
+    # Both failed — surface the last API error
+    err = _last_api_error or "Could not fetch screening questions."
+    return [], err
 
 
 def _fmt_money(val):
@@ -392,6 +427,7 @@ def search_jobs(keywords, job_type="all", limit=30, token=None):
             ciphertext = node.get("ciphertext", "")
             job = {
                 "id": jid,
+                "ciphertext": ciphertext,  # ~022... format used for job detail lookups
                 "title": node.get("title", ""),
                 "description": node.get("description", ""),
                 "budget": budget,

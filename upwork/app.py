@@ -338,10 +338,15 @@ if st.session_state.searched:
                 col_gen, col_regen, col_spacer = st.columns([2, 2, 4])
                 with col_gen:
                     if st.button("✍️ Generate Proposal", key=f"gen_{jid}"):
-                        # Fetch screening questions on-demand (not available in search results)
+                        # Fetch screening questions on-demand (not in search results)
                         with st.spinner("Checking for screening questions..."):
-                            questions = fetch_job_questions(jid, token=st.session_state.access_token)
-                            job["questions"] = questions  # cache on the job dict
+                            questions, q_err = fetch_job_questions(
+                                jid,
+                                ciphertext=job.get("ciphertext"),
+                                token=st.session_state.access_token,
+                            )
+                            job["questions"] = questions  # cache for Regenerate
+                            job["questions_err"] = q_err
                         spinner_msg = "Writing proposal & answers..." if questions else "Writing proposal..."
                         with st.spinner(spinner_msg):
                             proposal = generate_proposal(
@@ -370,6 +375,10 @@ if st.session_state.searched:
                                     questions=cached_questions or None,
                                 )
                             st.session_state.proposals[jid] = proposal_text
+
+                    # Show warning if question fetch failed (vs. job genuinely having none)
+                    if job.get("questions_err"):
+                        st.warning(f"⚠️ Couldn't fetch screening questions: {job['questions_err']}")
 
                     if proposal_text.startswith("Error:"):
                         st.error(proposal_text)
