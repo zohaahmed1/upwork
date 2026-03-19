@@ -334,16 +334,19 @@ if st.session_state.searched:
                 st.caption(preview)
 
                 # ── Proposal controls ──────────────────────────────────────────
+                has_questions = bool(job.get("questions"))
                 col_gen, col_regen, col_spacer = st.columns([2, 2, 4])
                 with col_gen:
-                    if st.button("✍️ Generate Proposal", key=f"gen_{jid}"):
-                        with st.spinner("Writing proposal..."):
+                    label = "✍️ Generate Proposal + Answers" if has_questions else "✍️ Generate Proposal"
+                    if st.button(label, key=f"gen_{jid}"):
+                        with st.spinner("Writing proposal..." if not has_questions else "Writing proposal & answers..."):
                             proposal = generate_proposal(
                                 title=job["title"],
                                 description=job["description"],
                                 budget=job["budget"],
                                 skills=job["skills"],
                                 client_info=format_client(job["client"]),
+                                questions=job.get("questions"),
                             )
                         st.session_state.proposals[jid] = proposal
 
@@ -359,28 +362,49 @@ if st.session_state.searched:
                                     budget=job["budget"],
                                     skills=job["skills"],
                                     client_info=format_client(job["client"]),
+                                    questions=job.get("questions"),
                                 )
                             st.session_state.proposals[jid] = proposal_text
 
-                    # Word count with warning if over limit
-                    word_count = len(proposal_text.split())
                     if proposal_text.startswith("Error:"):
                         st.error(proposal_text)
                     else:
+                        # Split proposal from Q&A answers (separated by ---)
+                        if "\n---\n" in proposal_text:
+                            proposal_part, qa_part = proposal_text.split("\n---\n", 1)
+                        else:
+                            proposal_part = proposal_text
+                            qa_part = ""
+
+                        # ── Proposal box ──────────────────────────────────────
+                        word_count = len(proposal_part.split())
                         wc_label = f"📝 {word_count} words"
                         if word_count > 200:
                             wc_label += " ⚠️ over 200 — trim before sending"
                         st.caption(wc_label)
-                        # Editable text area — easy to tweak and copy
-                        edited = st.text_area(
-                            "Proposal (edit before sending)",
-                            value=proposal_text,
+                        edited_proposal = st.text_area(
+                            "Proposal",
+                            value=proposal_part.strip(),
                             height=200,
                             key=f"proposal_text_{jid}",
                             label_visibility="collapsed",
                         )
-                        if edited != proposal_text:
-                            st.session_state.proposals[jid] = edited
+
+                        # ── Screening Q&A box (shown only when present) ───────
+                        if qa_part.strip():
+                            st.caption("📋 Screening question answers — paste each into Upwork's question fields")
+                            edited_qa = st.text_area(
+                                "Screening answers",
+                                value=qa_part.strip(),
+                                height=150,
+                                key=f"qa_text_{jid}",
+                                label_visibility="collapsed",
+                            )
+                            # Persist edits to both parts
+                            st.session_state.proposals[jid] = edited_proposal + "\n---\n" + edited_qa
+                        else:
+                            if edited_proposal != proposal_part.strip():
+                                st.session_state.proposals[jid] = edited_proposal
 
 elif not st.session_state.searched:
     st.markdown("""

@@ -169,9 +169,27 @@ We run an AI-assisted workflow - brief to 20 client-ready variants in under 2 ho
 How many variants are you running right now? When did you last test a new hook or format?"""
 
 
-def _build_user_prompt(title, description, budget, skills, client_info):
+def _build_user_prompt(title, description, budget, skills, client_info, questions=None):
     skills_str = ", ".join(skills[:8]) if skills else "not listed"
     client_str = client_info or "no additional client info"
+
+    if questions:
+        qs_block = "\n".join(f"{i+1}. {q}" for i, q in enumerate(questions))
+        questions_section = f"""
+
+Screening Questions from the client:
+{qs_block}
+
+After the proposal, write exactly "---" on its own line, then answer each question. Format:
+Q: [question]
+A: [1-3 sentence answer in Zoha's voice — direct, backed by a specific result or fact, no fluff]
+
+Keep answers short. Use case studies where relevant."""
+        output_instruction = "Output the proposal, then --- , then the Q&A answers. No other labels or preamble. Start directly with the hook."
+    else:
+        questions_section = ""
+        output_instruction = "Output the proposal only. No labels, no reasoning, no preamble. Start directly with the hook sentence."
+
     return f"""Write a proposal for this Upwork job.
 
 Job Title: {title}
@@ -180,12 +198,12 @@ Required Skills: {skills_str}
 Client Context: {client_str}
 
 Job Description:
-{description[:2000]}
+{description[:2000]}{questions_section}
 
-Output the proposal only. No labels, no job-type tag, no reasoning, no separator lines, no preamble. Start directly with the hook sentence. Under 200 words. No bullet points. No em-dashes."""
+{output_instruction} Under 200 words for the proposal. No bullet points. No em-dashes."""
 
 
-def _via_sdk(user_prompt):
+def _via_sdk(user_prompt, max_tokens=512):
     """Generate using Anthropic Python SDK."""
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
@@ -193,7 +211,7 @@ def _via_sdk(user_prompt):
     client = _anthropic.Anthropic(api_key=api_key)
     msg = client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=512,
+        max_tokens=max_tokens,
         system=_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_prompt}],
     )
@@ -219,7 +237,7 @@ def _via_oauth(user_prompt):
         },
         json={
             "model": "claude-3-5-sonnet-20241022",
-            "max_tokens": 512,
+            "max_tokens": 900,
             "system": _SYSTEM_PROMPT,
             "messages": [{"role": "user", "content": user_prompt}],
         },
@@ -302,23 +320,26 @@ def _via_cli(full_prompt):
     raise RuntimeError(f"claude CLI process exited unexpectedly (code {p.exitcode})")
 
 
-def generate_proposal(title, description, budget, skills, client_info=""):
-    """Generate a tailored Upwork proposal.
+def generate_proposal(title, description, budget, skills, client_info="", questions=None):
+    """Generate a tailored Upwork proposal, optionally with screening question answers.
 
     Priority:
       1. Anthropic SDK    — if ANTHROPIC_API_KEY is set
       2. OAuth API call   — if CLAUDE_CODE_OAUTH_TOKEN is set (Claude Max, no API key needed)
       3. claude CLI       — local fallback via multiprocessing spawn
 
-    Returns proposal text string, or an error message starting with 'Error:'.
+    Returns proposal text string (with Q&A appended after '---' if questions given),
+    or an error message starting with 'Error:'.
     """
-    user_prompt = _build_user_prompt(title, description, budget, skills, client_info)
+    user_prompt = _build_user_prompt(title, description, budget, skills, client_info, questions)
     full_prompt = f"{_SYSTEM_PROMPT}\n\n---\n\n{user_prompt}"
+    # Increase token limit when answering screening questions
+    _max_tokens = 900 if questions else 512
 
     # 1. SDK
     if _sdk_available and os.environ.get("ANTHROPIC_API_KEY"):
         try:
-            return _via_sdk(user_prompt)
+            return _via_sdk(user_prompt, max_tokens=_max_tokens)
         except Exception as e:
             return f"Error: Anthropic SDK failed — {e}"
 

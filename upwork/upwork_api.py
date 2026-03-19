@@ -238,6 +238,7 @@ query SearchJobs($searchExpr: String!) {
         hourlyBudgetMin { displayValue rawValue }
         hourlyBudgetMax { displayValue rawValue }
         skills { name }
+        questions { question }
         client {
           totalFeedback
           totalPostedJobs
@@ -368,6 +369,10 @@ def search_jobs(keywords, job_type="all", limit=30, token=None):
             }
 
             ciphertext = node.get("ciphertext", "")
+            # Extract screening questions (field may be absent on some jobs)
+            raw_questions = node.get("questions") or []
+            questions = [q.get("question", "").strip() for q in raw_questions if q.get("question")]
+
             job = {
                 "id": jid,
                 "title": node.get("title", ""),
@@ -378,6 +383,7 @@ def search_jobs(keywords, job_type="all", limit=30, token=None):
                 "client": client,
                 "created": node.get("createdDateTime", ""),
                 "url": f"https://www.upwork.com/jobs/{ciphertext}" if ciphertext else "",
+                "questions": questions,
             }
 
             if job_type == "hourly" and not is_hourly:
