@@ -113,10 +113,9 @@ def _via_oauth(user_prompt):
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
             "anthropic-version": "2023-06-01",
-            "anthropic-beta": "oauth-2025-04-20",
         },
         json={
-            "model": "claude-sonnet-4-6",
+            "model": "claude-3-5-sonnet-20241022",
             "max_tokens": 512,
             "system": _SYSTEM_PROMPT,
             "messages": [{"role": "user", "content": user_prompt}],
