@@ -182,9 +182,7 @@ Client Context: {client_str}
 Job Description:
 {description[:2000]}
 
-Identify the job type first (Reddit Ads, Meta/eCommerce, B2B SaaS, B2C SaaS, LinkedIn Ads, TikTok Ads, Event Marketing, Creative Strategy, or Campaign Management), then write the proposal using the matching case studies and CTA from your instructions.
-
-Under 200 words. No bullet points. No em-dashes. Start with the hook."""
+Output the proposal only. No labels, no job-type tag, no reasoning, no separator lines, no preamble. Start directly with the hook sentence. Under 200 words. No bullet points. No em-dashes."""
 
 
 def _via_sdk(user_prompt):

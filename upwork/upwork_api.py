@@ -80,35 +80,56 @@ KEYWORD_GROUPS = {
     "Performance Marketing": ["performance marketing", "paid media specialist"],
 }
 
-# Weights based on win-rate analysis of 312 wins / 1225 proposals
+# Positive keyword scores — specific paid-ads signals only.
+# Generic terms (saas, agency, instagram, cpa) removed: appear in too many
+# unrelated jobs and inflate scores for non-fits.
 _SCORE_KEYWORDS = {
-    # Highest win-rate signals (35-41%)
+    # Highest specificity — core services (4 pts)
+    "reddit ads": 4,
+    "reddit advertising": 4,
+    # Strong paid-ads signals (3 pts)
+    "meta ads": 3,
+    "facebook ads": 3,
+    "facebook advertising": 3,
     "campaign management": 3,
     "creative strategist": 3,
     "creative strategy": 3,
-    "campaign setup": 3,
-    "dtc": 3,
-    # Strong signals (28-32%)
-    "reddit": 3,
-    "meta ads": 2,
-    "google ads": 2,
-    "campaign": 2,
-    "performance marketing": 2,
-    "paid media": 2,
-    "paid social": 2,
-    "media buyer": 2,
+    "media buyer": 3,
+    "paid social": 3,
+    "performance marketing": 3,
+    "paid media": 3,
+    # Supporting paid-ads signals (2 pts)
     "ad creative": 2,
-    "b2b saas": 2,
+    "campaign setup": 2,
     "roas": 2,
-    # Supporting signals
-    "facebook ads": 1,
+    "google ads": 2,
+    "tiktok ads": 2,
+    "ugc ads": 2,
+    "dtc ads": 2,
+    "ecommerce ads": 2,
+    "b2b saas ads": 2,
+    "paid advertising": 2,
+    # Contextual signals — only add value when other signals already present (1 pt)
+    "dtc": 1,
     "ecommerce": 1,
-    "ecomm": 1,
-    "saas": 1,
-    "instagram": 1,
-    "agency": 1,
-    "cpa": 1,
-    "cpl": 1,
+    "shopify ads": 1,
+    "b2b paid": 1,
+}
+
+# Negative signals — deduct for clear wrong-fits
+_NEGATIVE_KEYWORDS = {
+    "seo": -3,
+    "search engine optimization": -3,
+    "organic social": -2,
+    "content writing": -2,
+    "copywriting": -2,
+    "web design": -2,
+    "website development": -2,
+    "wordpress": -2,
+    "influencer marketing": -2,
+    "email marketing": -1,
+    "email campaign": -1,
+    "graphic design": -1,
 }
 
 _last_api_error = None
@@ -242,48 +263,59 @@ def _fmt_money(val):
 
 
 def _score_job(job):
-    score = 0
     text = (job.get("title", "") + " " + job.get("description", "")).lower()
-    kw_score = sum(pts for kw, pts in _SCORE_KEYWORDS.items() if kw in text)
-    # Cap at 4 — every result is already payment-verified (we filter verifiedPaymentOnly_eq:
-    # true), so keywords + budget + client quality + recency drive differentiation
-    score += min(kw_score, 4)
 
+    # ── Keyword relevance (0–6) ────────────────────────────────────────────────
+    kw_raw = sum(pts for kw, pts in _SCORE_KEYWORDS.items() if kw in text)
+    kw_score = min(kw_raw, 6)
+
+    # ── Negative signals ──────────────────────────────────────────────────────
+    neg = sum(pts for kw, pts in _NEGATIVE_KEYWORDS.items() if kw in text)
+
+    # ── Gate: if paid-ads signal is weak, budget/client bonuses don't apply ───
+    # Prevents high-budget irrelevant jobs (e.g. SEO, web dev, organic) from
+    # scoring 7-9 purely on client quality + recency.
+    if kw_score < 2:
+        return max(0, min(kw_score + neg, 4))
+
+    # ── Budget (0–2) ──────────────────────────────────────────────────────────
     budget_str = job.get("budget", "")
     engagement = job.get("engagement", "").lower()
     is_hourly = "/hr" in budget_str or "hourly" in engagement
+    budget_score = 0
     try:
         num = float(
             budget_str.replace("$", "").replace(",", "").replace("/hr", "")
             .strip().split("-")[0].strip()
         )
         if is_hourly:
-            # Hourly: $15-50/hr is the win sweet spot; $50+ is premium
-            score += 3 if num >= 50 else (2 if num >= 15 else 0)
+            budget_score = 2 if num >= 50 else (1 if num >= 25 else 0)
         else:
-            # Fixed: $1k-3k is the win sweet spot (28 wins), $3k+ also good
-            score += 3 if 1000 <= num <= 3000 else (2 if num > 3000 else (1 if num >= 500 else 0))
+            budget_score = 2 if num >= 1000 else (1 if num >= 500 else 0)
     except Exception:
         pass
 
-    # Payment verification not scored — all results are verified (filtered above)
+    # ── Client quality (0–2) ──────────────────────────────────────────────────
     client = job.get("client") or {}
+    client_score = 0
     if float(client.get("totalFeedback") or 0) >= 4.5:
-        score += 1
-    if int(client.get("totalPostedJobs") or 0) >= 10:
-        score += 1
+        client_score += 1
+    if int(client.get("totalPostedJobs") or 0) >= 5:
+        client_score += 1
 
+    # ── Recency (0–1) ─────────────────────────────────────────────────────────
+    recency = 0
     created = job.get("created", "")
     if created:
         try:
             dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
-            age_hours = (datetime.now(timezone.utc) - dt).total_seconds() / 3600
-            if age_hours <= 48:
-                score += 1
+            if (datetime.now(timezone.utc) - dt).total_seconds() / 3600 <= 48:
+                recency = 1
         except Exception:
             pass
 
-    return min(score, 10)
+    total = kw_score + budget_score + client_score + recency + neg
+    return max(0, min(total, 10))
 
 
 def search_jobs(keywords, job_type="all", limit=30, token=None):
