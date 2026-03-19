@@ -299,6 +299,62 @@ def _fmt_money(val):
         return str(val) if val else ""
 
 
+def _parse_spent(display_value):
+    """Parse Upwork's totalSpent displayValue ('$25K', '$1.2M', '$500') → float."""
+    try:
+        s = (display_value or "").replace("$", "").replace(",", "").strip().upper()
+        if not s or s in ("+", ""):
+            return 0.0
+        if s.endswith("K"):
+            return float(s[:-1]) * 1_000
+        if s.endswith("M"):
+            return float(s[:-1]) * 1_000_000
+        return float(s)
+    except Exception:
+        return 0.0
+
+
+def _budget_score(budget_str, engagement):
+    """Return 0-2 budget score.
+
+    Thresholds:
+      Hourly : >= $50/hr = 2,  >= $30/hr = 1
+      Fixed  : >= $2500   = 2, >= $1000  = 1
+    """
+    is_hourly = "/hr" in budget_str or "hourly" in (engagement or "").lower()
+    try:
+        num = float(
+            budget_str.replace("$", "").replace(",", "").replace("/hr", "")
+            .strip().split("-")[0].strip()
+        )
+        if is_hourly:
+            return 2 if num >= 50 else (1 if num >= 30 else 0)
+        else:
+            return 2 if num >= 2500 else (1 if num >= 1000 else 0)
+    except Exception:
+        return 0
+
+
+def _client_score(client, gated):
+    """Return 0-3 client quality score.
+
+    +1 rating >= 4.5
+    +1 jobs posted >= 5
+    +1 total platform spend >= $20k  (signals serious, repeat buyer)
+    """
+    if gated:
+        return 0
+    score = 0
+    if float(client.get("totalFeedback") or 0) >= 4.5:
+        score += 1
+    if int(client.get("totalPostedJobs") or 0) >= 5:
+        score += 1
+    spent_str = (client.get("totalSpent") or {}).get("amount", "")
+    if _parse_spent(spent_str) >= 20_000:
+        score += 1
+    return score
+
+
 def _score_job(job):
     text = (job.get("title", "") + " " + job.get("description", "")).lower()
 
@@ -310,35 +366,14 @@ def _score_job(job):
     neg = sum(pts for kw, pts in _NEGATIVE_KEYWORDS.items() if kw in text)
 
     # ── Gate: if paid-ads signal is weak, budget/client bonuses don't apply ───
-    # Prevents high-budget irrelevant jobs (e.g. SEO, web dev, organic) from
-    # scoring 7-9 purely on client quality + recency.
     if kw_score < 2:
         return max(0, min(kw_score + neg, 4))
 
     # ── Budget (0–2) ──────────────────────────────────────────────────────────
-    budget_str = job.get("budget", "")
-    engagement = job.get("engagement", "").lower()
-    is_hourly = "/hr" in budget_str or "hourly" in engagement
-    budget_score = 0
-    try:
-        num = float(
-            budget_str.replace("$", "").replace(",", "").replace("/hr", "")
-            .strip().split("-")[0].strip()
-        )
-        if is_hourly:
-            budget_score = 2 if num >= 50 else (1 if num >= 25 else 0)
-        else:
-            budget_score = 2 if num >= 1000 else (1 if num >= 500 else 0)
-    except Exception:
-        pass
+    budget_score = _budget_score(job.get("budget", ""), job.get("engagement", ""))
 
-    # ── Client quality (0–2) ──────────────────────────────────────────────────
-    client = job.get("client") or {}
-    client_score = 0
-    if float(client.get("totalFeedback") or 0) >= 4.5:
-        client_score += 1
-    if int(client.get("totalPostedJobs") or 0) >= 5:
-        client_score += 1
+    # ── Client quality (0–3) ──────────────────────────────────────────────────
+    client_score = _client_score(job.get("client") or {}, gated=False)
 
     # ── Recency (0–1) ─────────────────────────────────────────────────────────
     recency = 0
@@ -360,7 +395,8 @@ def score_breakdown(job):
 
     Returns dict:
         kw_score, budget_score, client_score, recency, neg_total,
-        gated (bool), matched_pos [(kw, pts)], matched_neg [(kw, pts)]
+        gated (bool), matched_pos [(kw, pts)], matched_neg [(kw, pts)],
+        spent_ok (bool), spend_str (str)
     """
     text = (job.get("title", "") + " " + job.get("description", "")).lower()
 
@@ -371,30 +407,12 @@ def score_breakdown(job):
     neg_total = sum(pts for _, pts in matched_neg)
     gated = kw_score < 2
 
-    budget_str = job.get("budget", "")
-    engagement = job.get("engagement", "").lower()
-    is_hourly = "/hr" in budget_str or "hourly" in engagement
-    budget_score = 0
-    if not gated:
-        try:
-            num = float(
-                budget_str.replace("$", "").replace(",", "").replace("/hr", "")
-                .strip().split("-")[0].strip()
-            )
-            if is_hourly:
-                budget_score = 2 if num >= 50 else (1 if num >= 25 else 0)
-            else:
-                budget_score = 2 if num >= 1000 else (1 if num >= 500 else 0)
-        except Exception:
-            pass
-
+    budget_score = 0 if gated else _budget_score(job.get("budget", ""), job.get("engagement", ""))
     client = job.get("client") or {}
-    client_score = 0
-    if not gated:
-        if float(client.get("totalFeedback") or 0) >= 4.5:
-            client_score += 1
-        if int(client.get("totalPostedJobs") or 0) >= 5:
-            client_score += 1
+    client_score = _client_score(client, gated)
+
+    spend_str = (client.get("totalSpent") or {}).get("amount", "")
+    spent_ok = _parse_spent(spend_str) >= 20_000
 
     recency = 0
     created = job.get("created", "")
@@ -415,6 +433,8 @@ def score_breakdown(job):
         "gated": gated,
         "matched_pos": matched_pos,
         "matched_neg": matched_neg,
+        "spent_ok": spent_ok,
+        "spend_str": spend_str,
     }
 
 

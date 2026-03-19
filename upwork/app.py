@@ -247,10 +247,9 @@ with st.sidebar:
 
     selected_groups = []
     for group_name in KEYWORD_GROUPS:
-        default = group_name in ["Reddit Ads", "Meta / Facebook Ads", "Campaign Management"]
         key = f"kw_{group_name}"
         if key not in st.session_state:
-            st.session_state[key] = default
+            st.session_state[key] = True  # all selected by default
         if st.checkbox(group_name, value=st.session_state[key], key=key):
             selected_groups.append(group_name)
 
@@ -459,9 +458,10 @@ if st.session_state.searched:
                         neg_parts = [f"{pts} `{kw}`" for kw, pts in bd["matched_neg"]]
                         lines.append(f"**Negatives ({bd['neg_total']}):** {' · '.join(neg_parts)}")
                     if bd["budget_score"]:
-                        lines.append(f"**Budget:** +{bd['budget_score']}")
+                        lines.append(f"**Budget:** +{bd['budget_score']} (hourly ≥$30/hr · fixed ≥$1k)")
                     if bd["client_score"]:
-                        lines.append(f"**Client quality:** +{bd['client_score']}")
+                        spend_note = f" · {bd['spend_str']} spent ✓" if bd["spent_ok"] and bd["spend_str"] else ""
+                        lines.append(f"**Client:** +{bd['client_score']}{spend_note}")
                     if bd["recency"]:
                         lines.append("**Recency:** +1 (posted < 48h)")
                     st.markdown("  \n".join(lines))
