@@ -60,6 +60,43 @@ def _save_to_applied_log(job: dict, proposal_text: str = "") -> None:
         pass  # Streamlit Cloud has ephemeral FS — log stays in session_state only
 
 
+# ── Search results + proposals cache (survives page refreshes) ─────────────────
+_JOBS_CACHE_PATH = Path(__file__).resolve().parent / "jobs_cache.json"
+_PROPOSALS_CACHE_PATH = Path(__file__).resolve().parent / "proposals_cache.json"
+
+
+def _save_jobs_cache(jobs: list) -> None:
+    try:
+        _JOBS_CACHE_PATH.write_text(json.dumps(jobs, indent=2))
+    except Exception:
+        pass
+
+
+def _load_jobs_cache() -> list:
+    try:
+        if _JOBS_CACHE_PATH.exists():
+            return json.loads(_JOBS_CACHE_PATH.read_text())
+    except Exception:
+        pass
+    return []
+
+
+def _save_proposals_cache(proposals: dict) -> None:
+    try:
+        _PROPOSALS_CACHE_PATH.write_text(json.dumps(proposals, indent=2))
+    except Exception:
+        pass
+
+
+def _load_proposals_cache() -> dict:
+    try:
+        if _PROPOSALS_CACHE_PATH.exists():
+            return json.loads(_PROPOSALS_CACHE_PATH.read_text())
+    except Exception:
+        pass
+    return {}
+
+
 st.set_page_config(
     page_title="Upwork Job Finder — Skip the Noise",
     page_icon="🎯",
@@ -70,11 +107,11 @@ st.set_page_config(
 if "access_token" not in st.session_state:
     st.session_state.access_token = STORED_ACCESS_TOKEN
 if "jobs" not in st.session_state:
-    st.session_state.jobs = []
+    st.session_state.jobs = _load_jobs_cache()
 if "proposals" not in st.session_state:
-    st.session_state.proposals = {}
+    st.session_state.proposals = _load_proposals_cache()
 if "searched" not in st.session_state:
-    st.session_state.searched = False
+    st.session_state.searched = bool(st.session_state.jobs)
 if "dismissed" not in st.session_state:
     st.session_state.dismissed = set()
 if "applied" not in st.session_state:
@@ -324,6 +361,8 @@ with st.sidebar:
             st.session_state.searched = False
             st.session_state.applied = set()
             st.session_state.dismissed = set()
+            _save_jobs_cache([])
+            _save_proposals_cache({})
             st.rerun()
 
     if st.button("Disconnect", use_container_width=True):
@@ -333,6 +372,8 @@ with st.sidebar:
         st.session_state.searched = False
         st.session_state.applied = set()
         st.session_state.dismissed = set()
+        _save_jobs_cache([])
+        _save_proposals_cache({})
         st.rerun()
 
 # ── Search Logic ───────────────────────────────────────────────────────────────
@@ -361,6 +402,7 @@ if search_clicked:
         else:
             st.session_state.jobs = jobs
             st.session_state.searched = True
+            _save_jobs_cache(jobs)
             if err:
                 st.warning(f"Some searches failed: {err}")
 
@@ -503,6 +545,7 @@ if st.session_state.searched:
                                 angle=_angle,
                             )
                         st.session_state.proposals[jid] = proposal
+                        _save_proposals_cache(st.session_state.proposals)
 
                 # ── Manual screening questions input ───────────────────────────
                 with st.expander("📋 Add screening questions manually"):
@@ -527,6 +570,7 @@ if st.session_state.searched:
                                     angle=_angle,
                                 )
                             st.session_state.proposals[jid] = result
+                            _save_proposals_cache(st.session_state.proposals)
                             st.rerun()
                         else:
                             st.caption("Paste at least one question first.")
@@ -550,6 +594,7 @@ if st.session_state.searched:
                                     angle=_angle,
                                 )
                             st.session_state.proposals[jid] = proposal_text
+                            _save_proposals_cache(st.session_state.proposals)
 
                     # Show warning if question auto-fetch failed
                     if job.get("questions_err"):
